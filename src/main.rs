@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
 use std::str::FromStr;
 use chumsky::chain::Chain;
 use scraper::Html;
@@ -10,10 +9,35 @@ use reqwest::blocking::Client;
 use reqwest::header;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value::Array;
+use clap::{Parser, Subcommand};
 
 
 const BASEURL: &str = "https://www.secondsol.com";
+
+#[derive(Parser, Debug)]
+#[command()]
+struct Args {
+    #[command(subcommand)]
+    cmd: SubCommand,
+}
+#[derive(Subcommand, Debug, Clone)]
+enum SubCommand {
+    /// Filter current Database using zipcode filters from config.txt
+    Filter,
+
+    /// Delete current Database
+    ClearLocal,
+
+    /// Check all pages for articles, update Database, delete articles that are not longer available.
+    PullAll,
+
+    /// Check specified number pages for most recent articles, update Database,  DOES NOT delete articles that are not longer available.
+    Pull {
+        /// Number of most recent pages to check
+        #[arg(short, long, default_value_t = 1)]
+        pages: usize,
+    },
+}
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Article {
     url: String,
@@ -66,6 +90,9 @@ fn filter_articles(mut articles: HashMap<usize, Article>, zipcodes: Vec<(usize, 
 }
 
 fn main() {
+    let args = Args::parse();
+
+
     let config = load_config_file("config.txt".to_string());
     let client = build_client();
     let mut headers = header::HeaderMap::new();
@@ -79,7 +106,31 @@ fn main() {
     articles = serde_json::from_str(&articles_buf).unwrap_or(HashMap::new());
     println!("{} Old Articles Loaded!", articles.len());
 
-    let latest_ids = fetch_latest_ids(&client, &mut headers, 2);
+    match args.cmd {
+        SubCommand::Filter => { show_filtered(articles, config) }
+        SubCommand::ClearLocal => { clear_local(articles_file) }
+        SubCommand::PullAll => { pull_all(client.clone(), headers.clone(), articles_file); }
+        SubCommand::Pull { pages } => { pull_pages(pages, client.clone(), headers.clone(), &mut articles, articles_file); }
+    };
+}
+
+fn show_filtered(articles: HashMap<usize, Article>, config: Config) {
+    let filtered= filter_articles(articles.clone(), config.zipcodes);
+    println!("{} Articles meet filter", filtered.len());
+    println!("Filtered Articles:");
+    for article in filtered {
+        println!("{}",article.url)
+    }
+}
+
+fn clear_local(mut articles_file: File) {
+    articles_file.set_len(0).unwrap();
+    articles_file.seek(SeekFrom::Start(0)).unwrap();
+}
+
+fn pull_pages(pages: usize, client: Client, mut headers: header::HeaderMap, articles: &mut HashMap<usize, Article>, mut articles_file: File) {
+    println!("Fetching new Articles, Checking {pages} pages");
+    let latest_ids = fetch_latest_ids(&client, &mut headers, pages);
     println!("{} Latest IDs Found!", latest_ids.len());
     let new_ids: Vec<usize> = latest_ids.into_iter().filter(|x| !articles.contains_key(x)).collect();
     println!("{} New Articles Found!", new_ids.len());
@@ -87,19 +138,22 @@ fn main() {
     for (key, value) in new_articles {
         articles.insert(key, value);
     }
-    println!("{} Articles in DB", articles.len());
-    let filtered= filter_articles(articles.clone(), config.zipcodes);
-    println!("Filtered Articles:");
-    for article in filtered {
-        println!("{}",article.url)
-    }
-
     // Write new state of DB to File
     articles_file.set_len(0).unwrap();
     articles_file.seek(SeekFrom::Start(0)).unwrap();
     articles_file.write_all(serde_json::to_string(&articles).unwrap().as_ref()).unwrap();
 }
 
+fn pull_all(client: Client, mut headers: header::HeaderMap, mut articles_file: File) {
+    println!("Updating all Articles, Checking all pages");
+    let latest_ids = fetch_latest_ids(&client, &mut headers, 93);
+    println!("{} Articles Found!", latest_ids.len());
+    let new_articles = build_articles(latest_ids, client, headers);
+    // Write new state of DB to File
+    articles_file.set_len(0).unwrap();
+    articles_file.seek(SeekFrom::Start(0)).unwrap();
+    articles_file.write_all(serde_json::to_string(&new_articles).unwrap().as_ref()).unwrap();
+}
 
 fn build_articles(links: Vec<usize>, client: Client, headers: header::HeaderMap) -> HashMap<usize, Article> {
     let mut articles: HashMap<usize, Article> = HashMap::new();
