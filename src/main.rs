@@ -54,6 +54,31 @@ struct Config {
     zipcodes: Vec<(usize, usize)>
 }
 
+fn main() {
+    let args = Args::parse();
+
+
+    let config = load_config_file("config.txt".to_string());
+    let client = build_client();
+    let mut headers = header::HeaderMap::new();
+    headers.insert(header::COOKIE, config.cookie.parse().unwrap());
+
+    //Load articles Map
+    let mut articles_file = OpenOptions::new().write(true).read(true).truncate(false).create(true).open("cached_articles").unwrap();
+    let mut articles_buf = String::new();
+    articles_file.read_to_string(&mut articles_buf).unwrap();
+    let mut articles: HashMap<usize, Article>= HashMap::new();
+    articles = serde_json::from_str(&articles_buf).unwrap_or(HashMap::new());
+    println!("{} Old Articles Loaded!", articles.len());
+
+    match args.cmd {
+        SubCommand::Filter => { show_filtered(articles, config) }
+        SubCommand::ClearLocal => { clear_local(articles_file) }
+        SubCommand::PullAll => { pull_all(client.clone(), headers.clone(), articles_file); }
+        SubCommand::Pull { pages } => { pull_pages(pages, client.clone(), headers.clone(), &mut articles, articles_file); }
+    };
+}
+
 fn load_config_file(path: String) -> Config{
     let mut file = OpenOptions::new().write(false).read(true).truncate(false).create(false).open(path).expect("No config file specified. Should be `config.txt`");
     let mut buf = String::new();
@@ -84,31 +109,6 @@ fn filter_articles(mut articles: HashMap<usize, Article>, zipcodes: Vec<(usize, 
     let mut sorted_art = near.into_values().collect::<Vec<Article>>();
     sorted_art.sort_unstable_by(|x, y| x.price_per_watt.partial_cmp(&y.price_per_watt).unwrap());
     sorted_art
-}
-
-fn main() {
-    let args = Args::parse();
-
-
-    let config = load_config_file("config.txt".to_string());
-    let client = build_client();
-    let mut headers = header::HeaderMap::new();
-    headers.insert(header::COOKIE, config.cookie.parse().unwrap());
-
-    //Load articles Map
-    let mut articles_file = OpenOptions::new().write(true).read(true).truncate(false).create(true).open("cached_articles").unwrap();
-    let mut articles_buf = String::new();
-    articles_file.read_to_string(&mut articles_buf).unwrap();
-    let mut articles: HashMap<usize, Article>= HashMap::new();
-    articles = serde_json::from_str(&articles_buf).unwrap_or(HashMap::new());
-    println!("{} Old Articles Loaded!", articles.len());
-
-    match args.cmd {
-        SubCommand::Filter => { show_filtered(articles, config) }
-        SubCommand::ClearLocal => { clear_local(articles_file) }
-        SubCommand::PullAll => { pull_all(client.clone(), headers.clone(), articles_file); }
-        SubCommand::Pull { pages } => { pull_pages(pages, client.clone(), headers.clone(), &mut articles, articles_file); }
-    };
 }
 
 fn show_filtered(articles: HashMap<usize, Article>, config: Config) {
