@@ -46,9 +46,6 @@ struct Article {
     number_available: i32,
     min_number: i32,
     zipcode: usize,
-    // panel_model: String,
-    //age: i32,
-    // power: i32,
 }
 
 #[derive(Serialize, Deserialize)]
